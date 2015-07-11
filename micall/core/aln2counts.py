@@ -102,6 +102,7 @@ class SequenceReport(object):
             first_row = aligned_reads[0]
             self.seed = first_row['refname']
             self.qcut = first_row['qcut']
+            self.strand = first_row['strand']
 
         for row in aligned_reads:
             nuc_seq = row['seq']
@@ -111,7 +112,8 @@ class SequenceReport(object):
             # first run, prepare containers
             if not self.seed_aminos:
                 self.insert_writer.start_group(self.seed,
-                                               self.qcut)
+                                               self.qcut,
+                                               self.strand)
                 for reading_frame in range(3):
                     self.seed_aminos[reading_frame] = []
 
@@ -278,6 +280,7 @@ class SequenceReport(object):
         columns = ['seed',
                    'region',
                    'q-cutoff',
+                   'strand',
                    'query.aa.pos',
                    'refseq.aa.pos']
         columns.extend(amino_alphabet)
@@ -301,6 +304,7 @@ class SequenceReport(object):
                 row = {'seed': self.seed,
                        'region': region,
                        'q-cutoff': self.qcut,
+                       'strand': self.strand,
                        'query.aa.pos': query_pos,
                        'refseq.aa.pos': report_amino.position}
                 for letter in amino_alphabet:
@@ -312,6 +316,7 @@ class SequenceReport(object):
                               ['seed',
                                'region',
                                'q-cutoff',
+                               'strand',
                                'query.nuc.pos',
                                'refseq.nuc.pos',
                                'A',
@@ -336,6 +341,7 @@ class SequenceReport(object):
                 row = {'seed': self.seed,
                        'region': region,
                        'q-cutoff': self.qcut,
+                       'strand': self.strand,
                        'query.nuc.pos': query_pos,
                        'refseq.nuc.pos': ref_pos}
                 for base in 'ACTG':
@@ -353,6 +359,7 @@ class SequenceReport(object):
         return csv.DictWriter(conseq_file,
                               ['region',
                                'q-cutoff',
+                               'strand',
                                'consensus-percent-cutoff',
                                'sequence'],
                               lineterminator='\n')
@@ -370,6 +377,7 @@ class SequenceReport(object):
             conseq_writer.writerow(
                 {'region': self.seed,
                  'q-cutoff': self.qcut,
+                 'strand': self.strand,
                  'consensus-percent-cutoff': format_cutoff(mixture_cutoff),
                  'sequence': consensus})
     
@@ -377,6 +385,7 @@ class SequenceReport(object):
         return csv.DictWriter(nuc_variants_file,
                               ['seed',
                                'qcut',
+                               'strand',
                                'region',
                                'index',
                                'count',
@@ -395,6 +404,7 @@ class SequenceReport(object):
                 count, nuc_seq = variant
                 writer.writerow(dict(seed=self.seed,
                                      qcut=self.qcut,
+                                     strand=self.strand,
                                      region=coordinate_name,
                                      index=i,
                                      count=count,
@@ -405,6 +415,7 @@ class SequenceReport(object):
                               ['seed',
                                'region',
                                'qcut',
+                               'strand',
                                'queryseq',
                                'refseq'],
                               lineterminator='\n')
@@ -420,6 +431,7 @@ class SequenceReport(object):
                 fail_writer.writerow(dict(seed=self.seed,
                                           region=region,
                                           qcut=self.qcut,
+                                          strand=self.strand,
                                           queryseq=self.consensus[region],
                                           refseq=coordinate_ref))
     
@@ -560,13 +572,14 @@ class InsertionWriter(object):
                                             ['seed',
                                              'region',
                                              'qcut',
+                                             'strand',
                                              'left',
                                              'insert',
                                              'count'],
                                             lineterminator='\n')
         self.insert_writer.writeheader()
     
-    def start_group(self, seed, qcut):
+    def start_group(self, seed, qcut, strand):
         """ Start a new group of reads.
         
         @param seed: the name of the region these reads mapped to
@@ -574,6 +587,7 @@ class InsertionWriter(object):
         """
         self.seed = seed
         self.qcut = qcut
+        self.strand = strand
         self.nuc_seqs = Counter() # {nuc_seq: count}
     
     def add_nuc_read(self, offset_sequence, count):
@@ -635,6 +649,7 @@ class InsertionWriter(object):
                     seed=self.seed,
                     region=region,
                     qcut=self.qcut,
+                    strand=self.strand,
                     left=left+1,
                     insert=insert_seq,
                     count=count))
@@ -682,7 +697,7 @@ def aln2counts (aligned_csv, nuc_csv, amino_csv, coord_ins_csv, conseq_csv, fail
     # parse CSV file containing aligned reads, grouped by reference and quality cutoff
     aligned_reader = csv.DictReader(aligned_csv)
     for _key, aligned_reads in groupby(aligned_reader,
-                                       lambda row: (row['refname'], row['qcut'])):
+                                       lambda row: (row['refname'], row['qcut'], row['strand'])):
         report.read(aligned_reads)
         
         report.write_amino_counts(amino_csv)

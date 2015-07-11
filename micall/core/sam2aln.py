@@ -149,6 +149,14 @@ def is_first_read(flag):
     IS_FIRST_SEGMENT = 0x40
     return (int(flag) & IS_FIRST_SEGMENT) != 0
 
+def is_reverse_complement(flag):
+    """
+    16 0x10 SEQ being reverse complemented
+    :param flag:
+    :return:
+    """
+    IS_REVERSE_COMPLEMENT = 0x10
+    return (int(flag) & IS_REVERSE_COMPLEMENT) != 0
 
 def matchmaker(remap_csv):
     """
@@ -180,9 +188,18 @@ def parse_sam(rows):
     rname = row1['rname']
     qname = row1['qname']
 
+    rc1 = is_reverse_complement(row1['flag'])
+    rc2 = is_reverse_complement(row2['flag'])
+    if rc1 and not rc2:
+        is_positive_strand = True
+    elif not rc1 and rc2:
+        is_positive_strand = False
+    else:
+        is_positive_strand = None
+
     cigar1 = row1['cigar']
     if cigar1 == '*' or int(row1['mapq']) < read_mapping_cutoff:
-        return rname, None, insert_list
+        return rname, None, insert_list, failed_list, is_positive_strand
 
     pos1 = int(row1['pos'])-1  # convert 1-index to 0-index
     _, seq1, qual1, inserts = apply_cigar(cigar1, row1['seq'], row1['qual'])
@@ -203,7 +220,7 @@ def parse_sam(rows):
     # now process the mate
     cigar2 = row2['cigar']
     if cigar2 == '*' or int(row2['mapq']) < read_mapping_cutoff:
-        return rname, None, insert_list
+        return rname, None, insert_list, failed_list, is_positive_strand
 
     pos2 = int(row2['pos'])-1  # convert 1-index to 0-index
     _, seq2, qual2, inserts = apply_cigar(cigar2, row2['seq'], row2['qual'])
@@ -228,7 +245,7 @@ def parse_sam(rows):
             continue
         mseqs.update({qcut: mseq})
 
-    return rname, mseqs, insert_list, failed_list
+    return rname, mseqs, insert_list, failed_list, is_positive_strand
 
 
 def sam2aln(remap_csv, aligned_csv, insert_csv, failed_csv, nthreads=None):
@@ -241,7 +258,7 @@ def sam2aln(remap_csv, aligned_csv, insert_csv, failed_csv, nthreads=None):
     failed_writer = DictWriter(failed_csv, failed_fields)
     failed_writer.writeheader()
 
-    aligned = {}
+    aligned = {True: {}, False: {}}  # store strands separately
     if nthreads:
         from multiprocessing import Pool
         pool = Pool(processes=nthreads)
@@ -249,18 +266,18 @@ def sam2aln(remap_csv, aligned_csv, insert_csv, failed_csv, nthreads=None):
     else:
         iter = itertools.imap(parse_sam, matchmaker(remap_csv))
 
-    for rname, mseqs, insert_list, failed_list in iter:
+    for rname, mseqs, insert_list, failed_list, is_positive_strand in iter:
         if mseqs is None:
             continue
 
         if rname not in aligned:
-            aligned.update({rname: dict([(qcut, {}) for qcut in sam2aln_q_cutoffs])})
+            aligned.update({rname: dict([(qcut, {True:{}, False: {}, None: {}}) for qcut in sam2aln_q_cutoffs])})
 
         for qcut, mseq in mseqs.iteritems():
             # collect identical merged sequences
-            if mseq not in aligned[rname][qcut]:
-                aligned[rname][qcut].update({mseq: 0})
-            aligned[rname][qcut][mseq] += 1
+            if mseq not in aligned[rname][qcut][is_positive_strand]:
+                aligned[rname][qcut][is_positive_strand].update({mseq: 0})
+            aligned[rname][qcut][is_positive_strand][mseq] += 1
 
             # write out inserts to CSV
             for items in insert_list:
@@ -274,21 +291,23 @@ def sam2aln(remap_csv, aligned_csv, insert_csv, failed_csv, nthreads=None):
     insert_csv.close()
 
     # write out merged sequences to file
-    aligned_fields = ['refname', 'qcut', 'rank', 'count', 'offset', 'seq']
+    aligned_fields = ['refname', 'qcut', 'strand', 'rank', 'count', 'offset', 'seq']
     aligned_writer = DictWriter(aligned_csv, aligned_fields)
     aligned_writer.writeheader()
     for rname, data in aligned.iteritems():
         for qcut, data2 in data.iteritems():
-            # sort variants by count
-            intermed = [(count, len_gap_prefix(s), s) for s, count in data2.iteritems()]
-            intermed.sort(reverse=True)
-            for rank, (count, offset, seq) in enumerate(intermed):
-                aligned_writer.writerow(dict(refname=rname,
-                                             qcut=qcut,
-                                             rank=rank,
-                                             count=count,
-                                             offset=offset,
-                                             seq=seq.strip('-')))
+            for strand, data3 in data2.iteritems():
+                # sort variants by count
+                intermed = [(count, len_gap_prefix(s), s) for s, count in data3.iteritems()]
+                intermed.sort(reverse=True)
+                for rank, (count, offset, seq) in enumerate(intermed):
+                    aligned_writer.writerow(dict(refname=rname,
+                                                 qcut=qcut,
+                                                 strand=strand,
+                                                 rank=rank,
+                                                 count=count,
+                                                 offset=offset,
+                                                 seq=seq.strip('-')))
     aligned_csv.close()
 
 
