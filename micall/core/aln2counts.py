@@ -15,7 +15,7 @@ Dependencies:
     settings.py
     hyphyAlign.py
 """
-
+import sys
 import argparse
 from itertools import groupby
 import logging
@@ -43,6 +43,9 @@ def parseArgs():
     parser.add_argument('amino_csv',
                         type=argparse.FileType('w'),
                         help='CSV containing amino frequencies')
+    parser.add_argument('quality_csv',
+                        type=argparse.FileType('w'),
+                        help='CSV containing amino mean qualities')
     parser.add_argument('coord_ins_csv',
                         type=argparse.FileType('w'),
                         help='CSV containing insertions relative to coordinate reference')
@@ -104,8 +107,14 @@ class SequenceReport(object):
             self.qcut = first_row['qcut']
             self.strand = first_row['strand']
 
+        progress = 0
         for row in aligned_reads:
+            progress += 1
+            if progress % 100 == 0:
+                print progress
+
             nuc_seq = row['seq']
+            qual_str = row['qual']
             offset = int(row['offset'])
             count = int(row['count'])
 
@@ -122,9 +131,13 @@ class SequenceReport(object):
 
             # cycle through reading frames
             for reading_frame, frame_seed_aminos in self.seed_aminos.iteritems():
-                offset_nuc_seq = '-' * (reading_frame + offset) + nuc_seq
                 # pad to a codon boundary
+                offset_nuc_seq = '-' * (reading_frame + offset) + nuc_seq
                 offset_nuc_seq += '-' * ((3 - (len(offset_nuc_seq) % 3)) % 3)
+
+                offset_qual_str = '!' * (reading_frame + offset) + qual_str
+                offset_qual_str += '!' * ((3 - (len(offset_qual_str) % 3)) % 3)
+
                 start = offset - (offset % 3)
                 for nuc_pos in range(start, len(offset_nuc_seq), 3):
                     codon_index = nuc_pos / 3
@@ -133,15 +146,23 @@ class SequenceReport(object):
                         frame_seed_aminos.append(SeedAmino(len(frame_seed_aminos)))
 
                     # update amino acid counts
-                    codon = offset_nuc_seq[nuc_pos:nuc_pos + 3]
-                    frame_seed_aminos[codon_index].count_aminos(codon, count)
-                
+                    codon = offset_nuc_seq[nuc_pos:(nuc_pos+3)]
+                    qualon = offset_qual_str[nuc_pos:(nuc_pos+3)]
+                    mean_quality = sum(map(lambda q: ord(q)-33, qualon)) / 3.
+                    frame_seed_aminos[codon_index].count_aminos(codon, count, mean_quality)
+
+
     def _pair_align(self, reference, query, gap_open=15, gap_extend=5, use_terminal_gap_penalty=1):
         """ Align a query sequence to a reference sequence.
         
         @return: (aligned_ref, aligned_query, score)
         """
-        aligned_ref, aligned_query, score = gotoh.align_it_aa(reference, query, gap_open, gap_extend, use_terminal_gap_penalty)
+        try:
+            aligned_ref, aligned_query, score = gotoh.align_it_aa(reference, query, gap_open, gap_extend, use_terminal_gap_penalty)
+        except:
+            print reference, query
+            sys.exit()
+
         return aligned_ref, aligned_query, score
 
     def _map_to_coordinate_ref(self, coordinate_name, coordinate_ref):
@@ -263,6 +284,7 @@ class SequenceReport(object):
                 last_amino_index = last_amino_index or -1
                 end_pos = (last_amino_index+1) * 3
                 minimum_variant_length = len(coordinate_ref)/2
+
                 for row in aligned_reads:
                     count = int(row['count'])
                     offset = int(row['offset'])
@@ -271,6 +293,7 @@ class SequenceReport(object):
                     stripped_seq = clipped_seq.replace('-', '')
                     if len(stripped_seq) > minimum_variant_length:
                         variant_counts[clipped_seq] += count
+
                 coordinate_variants = [(count, seq)
                                        for seq, count in variant_counts.iteritems()]
                 coordinate_variants.sort(reverse=True)
@@ -287,10 +310,25 @@ class SequenceReport(object):
         return csv.DictWriter(amino_file,
                               columns,
                               lineterminator='\n')
+
+    def _create_quality_writer(self, quality_file):
+        columns = ['seed',
+                   'region',
+                   'q-cutoff',
+                   'strand',
+                   'query.aa.pos',
+                   'refseq.aa.pos']
+        columns.extend(amino_alphabet)
+        return csv.DictWriter(quality_file,
+                              columns,
+                              lineterminator='\n')
         
     def write_amino_header(self, amino_file):
         self._create_amino_writer(amino_file).writeheader()
-    
+
+    def write_quality_header(self, quality_file):
+        self._create_quality_writer(quality_file).writeheader()
+
     def write_amino_counts(self, amino_file):
         regions = self.reports.keys()
         regions.sort()
@@ -310,6 +348,29 @@ class SequenceReport(object):
                 for letter in amino_alphabet:
                     row[letter] = seed_amino.counts[letter]
                 amino_writer.writerow(row)
+
+    def write_quality_counts(self, quality_file):
+        regions = self.reports.keys()
+        regions.sort()
+        quality_writer = self._create_quality_writer(quality_file)
+        for region in regions:
+            for report_amino in self.reports[region]:
+                seed_amino = report_amino.seed_amino
+                query_pos = (str(seed_amino.consensus_index + 1)
+                             if seed_amino.consensus_index is not None
+                             else '')
+                row = {'seed': self.seed,
+                       'region': region,
+                       'q-cutoff': self.qcut,
+                       'strand': self.strand,
+                       'query.aa.pos': query_pos,
+                       'refseq.aa.pos': report_amino.position}
+                for letter in amino_alphabet:
+                    if seed_amino.counts[letter] > 0:
+                        row[letter] = seed_amino.quality[letter] / seed_amino.counts[letter]
+                    else:
+                        row[letter] = 0.  # avoid divide-by-zero error
+                quality_writer.writerow(row)
 
     def _create_nuc_writer(self, nuc_file):
         return csv.DictWriter(nuc_file,
@@ -450,17 +511,20 @@ class SeedAmino(object):
     def __init__(self, consensus_index):
         self.consensus_index = consensus_index
         self.counts = Counter()
+        self.quality = dict([(amino, 0.) for amino in amino_alphabet])
         self.nucleotides = [SeedNucleotide() for _ in range(3)]
         
-    def count_aminos(self, codon_seq, count):
+    def count_aminos(self, codon_seq, count, mean_quality):
         """ Record a set of reads at this position in the seed reference.
         @param codon_seq: a string of three nucleotides that were read at this
                           position
         @param count: the number of times they were read
+        @param mean_quality: mean quality score for this codon
         """
         amino = translate(codon_seq.upper())
         if amino in amino_alphabet:
             self.counts[amino] += count
+            self.quality[amino] += mean_quality
         for i in range(3):
             self.nucleotides[i].count_nucleotides(codon_seq[i], count)
     
@@ -471,8 +535,15 @@ class SeedAmino(object):
         @return: comma-separated list of counts in the same order as the
         amino_alphabet list
         """
-        return ','.join([str(self.counts[amino])
-                         for amino in amino_alphabet])
+        outstr = ''
+        for amino in amino_alphabet:
+            outstr += '%d,%f,' % (self.counts[amino],
+                                  self.quality[amino]/self.counts[amino])
+        outstr.strip(',')
+        outstr += '\n'
+        #return ','.join([str(self.counts[amino])
+        #                 for amino in amino_alphabet])
+        return outstr
         
     def get_consensus(self):
         """ Find the amino acid that was seen most often in count_aminos().
@@ -662,7 +733,7 @@ def format_cutoff(cutoff):
     return '{:0.3f}'.format(cutoff)    
 
 
-def aln2counts (aligned_csv, nuc_csv, amino_csv, coord_ins_csv, conseq_csv, failed_align_csv, nuc_variants_csv, cwd=None):
+def aln2counts (aligned_csv, nuc_csv, amino_csv, quality_csv, coord_ins_csv, conseq_csv, failed_align_csv, nuc_variants_csv, cwd=None):
     """
     Analyze aligned reads for nucleotide and amino acid frequencies.
     Generate consensus sequences.
@@ -689,6 +760,7 @@ def aln2counts (aligned_csv, nuc_csv, amino_csv, coord_ins_csv, conseq_csv, fail
                             projects,
                             conseq_mixture_cutoffs)
     report.write_amino_header(amino_csv)
+    report.write_quality_header(quality_csv)
     report.write_consensus_header(conseq_csv)
     report.write_failure_header(failed_align_csv)
     report.write_nuc_header(nuc_csv)
@@ -701,6 +773,7 @@ def aln2counts (aligned_csv, nuc_csv, amino_csv, coord_ins_csv, conseq_csv, fail
         report.read(aligned_reads)
         
         report.write_amino_counts(amino_csv)
+        report.write_quality_counts(quality_csv)
         report.write_consensus(conseq_csv)
         report.write_failure(failed_align_csv)
         report.write_insertions()
@@ -709,6 +782,7 @@ def aln2counts (aligned_csv, nuc_csv, amino_csv, coord_ins_csv, conseq_csv, fail
 
     aligned_csv.close()
     amino_csv.close()
+    quality_csv.close()
     nuc_csv.close()
     conseq_csv.close()
     coord_ins_csv.close()
@@ -717,7 +791,7 @@ def aln2counts (aligned_csv, nuc_csv, amino_csv, coord_ins_csv, conseq_csv, fail
 
 def main():
     args = parseArgs()
-    aln2counts(args.aligned_csv, args.nuc_csv, args.amino_csv, args.coord_ins_csv, args.conseq_csv,
+    aln2counts(args.aligned_csv, args.nuc_csv, args.amino_csv, args.quality_csv, args.coord_ins_csv, args.conseq_csv,
                args.failed_align_csv, args.nuc_variants_csv)
 
 if __name__ == '__main__':

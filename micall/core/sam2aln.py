@@ -97,6 +97,8 @@ def merge_pairs (seq1, seq2, qual1, qual2, q_cutoff=10, minimum_q_delta=5):
     base calls on the basis of quality scores.
     """
     mseq = ''
+    mqual = ''
+
     # force second read to be longest of the two
     if len(seq1) > len(seq2):
         seq1, seq2 = seq2, seq1
@@ -109,29 +111,38 @@ def merge_pairs (seq1, seq2, qual1, qual2, q_cutoff=10, minimum_q_delta=5):
             q1 = ord(qual1[i])-33
             if c1 == '-' and c2 == '-':
                 mseq += '-'
+                mqual += '!'
                 continue
             if c1 == c2:  # Reads agree and at least one has sufficient confidence
                 if q1 > q_cutoff or q2 > q_cutoff:
                     mseq += c1
+                    mqual += chr((q1+q2)/2+33)  # take the average base quality
                 else:
                     mseq += 'N'  # neither base is confident
+                    mqual += '!'
             else:
                 if abs(q2 - q1) >= minimum_q_delta:
                     if q1 > max(q2, q_cutoff):
                         mseq += c1
+                        mqual += qual1[i]
                     elif q2 > max(q1, q_cutoff):
                         mseq += c2
+                        mqual += qual2[i]
                     else:
                         mseq += 'N'
+                        mqual += '!'
                 else:
                     mseq += 'N'  # cannot resolve between discordant bases
+                    mqual += '!'
         else:
             # past end of read 1
             if c2 == '-' and q2 == 0:
                 mseq += 'n'  # interval between reads
+                mqual += '!'
                 continue
             mseq += c2 if (q2 > q_cutoff) else 'N'
-    return mseq
+            mqual += qual2[i] if (q2 > q_cutoff) else '!'
+    return mseq, mqual
 
 
 def len_gap_prefix(s):
@@ -174,7 +185,7 @@ def matchmaker(remap_csv):
             cached_rows.update({qname: row})
             continue
         # current row should be the second read of the pair
-        yield cached_rows[qname], row
+        yield cached_rows.pop(qname), row
 
 
 def parse_sam(rows):
@@ -237,13 +248,13 @@ def parse_sam(rows):
     # merge reads
     mseqs = {}
     for qcut in sam2aln_q_cutoffs:
-        mseq = merge_pairs(seq1, seq2, qual1, qual2, qcut)
+        mseq, mqual = merge_pairs(seq1, seq2, qual1, qual2, qcut)
         prop_N = mseq.count('N') / float(len(mseq.strip('-')))
         if prop_N > max_prop_N:
             # fail read pair
             failed_list.append([qname, qcut, seq1, qual1, seq2, qual2, prop_N, mseq])
             continue
-        mseqs.update({qcut: mseq})
+        mseqs.update({qcut: (mseq, mqual)})
 
     return rname, mseqs, insert_list, failed_list, is_positive_strand
 
@@ -266,6 +277,11 @@ def sam2aln(remap_csv, aligned_csv, insert_csv, failed_csv, nthreads=None):
     else:
         iter = itertools.imap(parse_sam, matchmaker(remap_csv))
 
+    aligned_fields = ['refname', 'qcut', 'strand', 'rank', 'count', 'offset', 'seq', 'qual']
+    aligned_writer = DictWriter(aligned_csv, aligned_fields)
+    aligned_writer.writeheader()
+
+    progress = 0
     for rname, mseqs, insert_list, failed_list, is_positive_strand in iter:
         if mseqs is None:
             continue
@@ -273,11 +289,11 @@ def sam2aln(remap_csv, aligned_csv, insert_csv, failed_csv, nthreads=None):
         if rname not in aligned:
             aligned.update({rname: dict([(qcut, {True:{}, False: {}, None: {}}) for qcut in sam2aln_q_cutoffs])})
 
-        for qcut, mseq in mseqs.iteritems():
+        for qcut, (mseq, mqual) in mseqs.iteritems():
             # collect identical merged sequences
-            if mseq not in aligned[rname][qcut][is_positive_strand]:
-                aligned[rname][qcut][is_positive_strand].update({mseq: 0})
-            aligned[rname][qcut][is_positive_strand][mseq] += 1
+            #if mseq not in aligned[rname][qcut][is_positive_strand]:
+            #    aligned[rname][qcut][is_positive_strand].update({mseq: 0})
+            aligned[rname][qcut][is_positive_strand].update({mseq: mqual})
 
             # write out inserts to CSV
             for items in insert_list:
@@ -287,27 +303,26 @@ def sam2aln(remap_csv, aligned_csv, insert_csv, failed_csv, nthreads=None):
             for items in failed_list:
                 failed_writer.writerow(dict(zip(failed_fields, items)))
 
+            # write out merged sequence and quality string to CSV
+            left = len_gap_prefix(mseq)
+            right = len(mseq)-len_gap_prefix(mseq[::-1])
+            qual = mqual[left:right]
+
+            # FIXME: this needs to be sorted on (refname, qcut, strand)
+            aligned_writer.writerow(dict(refname=rname,
+                                         qcut=qcut,
+                                         strand=is_positive_strand,
+                                         rank=0,
+                                         count=1,
+                                         offset=left,
+                                         seq=mseq.strip('-'),
+                                         qual=qual))
+        progress += 1
+        if progress % 100 == 0:
+            print progress
+
     failed_csv.close()
     insert_csv.close()
-
-    # write out merged sequences to file
-    aligned_fields = ['refname', 'qcut', 'strand', 'rank', 'count', 'offset', 'seq']
-    aligned_writer = DictWriter(aligned_csv, aligned_fields)
-    aligned_writer.writeheader()
-    for rname, data in aligned.iteritems():
-        for qcut, data2 in data.iteritems():
-            for strand, data3 in data2.iteritems():
-                # sort variants by count
-                intermed = [(count, len_gap_prefix(s), s) for s, count in data3.iteritems()]
-                intermed.sort(reverse=True)
-                for rank, (count, offset, seq) in enumerate(intermed):
-                    aligned_writer.writerow(dict(refname=rname,
-                                                 qcut=qcut,
-                                                 strand=strand,
-                                                 rank=rank,
-                                                 count=count,
-                                                 offset=offset,
-                                                 seq=seq.strip('-')))
     aligned_csv.close()
 
 
