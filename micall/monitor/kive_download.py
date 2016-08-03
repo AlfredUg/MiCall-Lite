@@ -16,6 +16,10 @@ from micall.settings import kive_server_url, kive_user, kive_password, home, \
 from micall.core.miseq_logging import init_logging
 
 
+class KivePurgedDataException(Exception):
+    pass
+
+
 def parse_args():
     parser = ArgumentParser(description='Download runs from Kive.')
     parser.add_argument('--startafter', '-a', help='Old runs start after "DD Mon YYYY HH:MM".')
@@ -66,49 +70,54 @@ def download_results(kive_runs, results_folder, run_folder):
     os.mkdir(coverage_dest_path)
 
     printed_headers = set()
-    for sample_name, kive_run in kive_runs:
-        outputs = kive_run.get_results()
-        output_names = ['remap_counts',
-                        'conseq',
-                        'conseq_ins',
-                        'failed_read',
-                        'nuc',
-                        'amino',
-                        'coord_ins',
-                        'failed_align',
-                        'nuc_variants',
-                        'g2p',
-                        'g2p_summary',
-                        'coverage_scores',
-                        'coverage_maps_tar',
-                        'counts']
-        for output_name in output_names:
-            dataset = outputs.get(output_name, None)
-            if not dataset:
-                continue
-            if not output_name.endswith('_tar'):
-                filename = os.path.join(results_folder, output_name + '.csv')
-                with open(filename, 'a') as result_file:
-                    for j, line in enumerate(dataset.readlines()):
-                        if j == 0:
-                            if output_name not in printed_headers:
-                                result_file.write('sample,' + line)
-                                printed_headers.add(output_name)
-                        else:
-                            result_file.write(sample_name + ',' + line)
-            else:
-                with open(tar_path, 'wb') as f:
-                    dataset.download(f)
-                with tarfile.open(tar_path) as tar:
-                    tar.extractall(untar_path)
-                for image_filename in os.listdir(coverage_source_path):
-                    source = os.path.join(coverage_source_path, image_filename)
-                    destination = os.path.join(coverage_dest_path, sample_name + '.' + image_filename)
-                    shutil.move(source, destination)
-
-    os.rmdir(coverage_source_path)
-    os.rmdir(untar_path)
-    os.remove(tar_path)
+    try:
+        for sample_name, kive_run in kive_runs:
+            outputs = kive_run.get_results()
+            output_names = ['remap_counts',
+                            'conseq',
+                            'conseq_ins',
+                            'failed_read',
+                            'nuc',
+                            'amino',
+                            'coord_ins',
+                            'failed_align',
+                            'nuc_variants',
+                            'g2p',
+                            'g2p_summary',
+                            'coverage_scores',
+                            'coverage_maps_tar',
+                            'counts']
+            for output_name in output_names:
+                dataset = outputs.get(output_name, None)
+                if not dataset:
+                    continue
+                if dataset["id"] is None:
+                    raise KivePurgedDataException()
+                if not output_name.endswith('_tar'):
+                    filename = os.path.join(results_folder, output_name + '.csv')
+                    with open(filename, 'a') as result_file:
+                        for j, line in enumerate(dataset.readlines()):
+                            if j == 0:
+                                if output_name not in printed_headers:
+                                    result_file.write('sample,' + line)
+                                    printed_headers.add(output_name)
+                            else:
+                                result_file.write(sample_name + ',' + line)
+                else:
+                    with open(tar_path, 'wb') as f:
+                        dataset.download(f)
+                    with tarfile.open(tar_path) as tar:
+                        tar.extractall(untar_path)
+                    for image_filename in os.listdir(coverage_source_path):
+                        source = os.path.join(coverage_source_path, image_filename)
+                        destination = os.path.join(coverage_dest_path, sample_name + '.' + image_filename)
+                        shutil.move(source, destination)
+    except KivePurgedDataException as e:
+        raise e
+    finally:
+        os.rmdir(coverage_source_path)
+        os.rmdir(untar_path)
+        os.remove(tar_path)
 
 
 def find_old_runs(kive, **kwargs):

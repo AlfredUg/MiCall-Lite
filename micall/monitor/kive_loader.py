@@ -16,7 +16,7 @@ from xml.etree import ElementTree
 from kiveapi.errors import KiveRunFailedException
 from micall import settings
 from micall.monitor import qai_helper, update_qai
-from micall.monitor.kive_download import kive_login, download_results
+from micall.monitor.kive_download import kive_login, download_results, KivePurgedDataException
 
 MAX_RUN_NAME_LENGTH = 60
 logger = logging.getLogger("kive_loader")
@@ -530,7 +530,16 @@ class KiveLoader(object):
             os.mkdir(results_folder)
         run_folder = os.path.join(settings.home, os.path.basename(folder))
         logger.info('downloading results for %r', folder)
-        download_results(runs, results_folder, run_folder)
+
+        try:
+            download_results(runs, results_folder, run_folder)
+        except KivePurgedDataException as e:
+            logger.warning("Required data was purged before it could be downloaded into %s; will be reprocessed",
+                           results_folder,
+                           exc_info=True)
+            shutil.rmtree(results_folder)  # necessary because output files get *appended* rather than overwritten
+            return
+
         update_qai.process_folder(results_folder)
         with open(os.path.join(results_folder, settings.DONE_PROCESSING), 'w'):
             pass  # Leave the file empty
