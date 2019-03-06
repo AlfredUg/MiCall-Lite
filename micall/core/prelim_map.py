@@ -34,7 +34,7 @@ line_counter = LineCounter()
 
 def prelim_map(fastq1, fastq2, prelim_csv, nthreads=BOWTIE_THREADS, callback=None,
                rdgopen=READ_GAP_OPEN, rfgopen=REF_GAP_OPEN, stderr=sys.stderr,
-               gzip=False, work_path=''):
+               gzip=False, work_path='', projects=None):
     """ Run the preliminary mapping step.
 
     @param fastq1: the file name for the forward reads in FASTQ format
@@ -49,6 +49,7 @@ def prelim_map(fastq1, fastq2, prelim_csv, nthreads=BOWTIE_THREADS, callback=Non
     @param stderr: where to write the standard error output from bowtie2 calls.
     @param gzip: if True, FASTQ files are compressed
     @param work_path:  optional path to store working files
+    @param projects:  if not None, user has overridden the default JSON file.
     """
     try:
         bowtie2 = Bowtie2(BOWTIE_VERSION, BOWTIE_PATH)
@@ -96,7 +97,11 @@ def prelim_map(fastq1, fastq2, prelim_csv, nthreads=BOWTIE_THREADS, callback=Non
                  max_progress=total_reads)
 
     # generate initial reference files
-    projects = project_config.ProjectConfig.loadDefault()
+    if projects is None:
+        projects = project_config.ProjectConfig.loadDefault()
+    else:
+        projects = project_config.ProjectConfig.load(projects)
+
     ref_path = os.path.join(work_path, 'micall.fasta')
     with open(ref_path, 'w') as ref:
         projects.writeSeedFasta(ref)

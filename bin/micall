@@ -37,6 +37,10 @@ def parseArgs():
                         help='<optional> Read length (default: 251nt).')
     parser.add_argument('--index', '-x', type=int, default=8,
                         help='<optional> Index length (default: 8nt).')
+    parser.add_argument('--projects', '-p',
+                        help='Override default projects JSON with a user-specified '
+                             'file.',
+                        type=argparse.FileType('rb'))
 
     return parser.parse_args()
 
