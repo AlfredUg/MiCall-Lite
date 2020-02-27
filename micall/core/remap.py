@@ -445,7 +445,7 @@ def remap(fastq1, fastq2, prelim_csv, remap_csv, remap_counts_csv=None,
     if json is None:
         projects = project_config.ProjectConfig.loadDefault()
     else:
-        projects = project_config.ProjectConfig.load(json)
+        projects = project_config.ProjectConfig.loadCustom(json)
 
     seeds = {}
     for seed, vals in projects.config['regions'].items():

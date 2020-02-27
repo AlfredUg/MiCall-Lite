@@ -850,7 +850,7 @@ def aln2counts(aligned_csv,
     if json is None:
         projects = project_config.ProjectConfig.loadDefault()
     else:
-        projects = project_config.ProjectConfig.load(json)
+        projects = project_config.ProjectConfig.loadCustom(json)
 
     # initialize reporter classes
     insert_writer = InsertionWriter(coord_ins_csv)
