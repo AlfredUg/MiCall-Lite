@@ -97,7 +97,7 @@ def prelim_map(fastq1, fastq2, prelim_csv,
     if json is None:
         projects = project_config.ProjectConfig.loadDefault()
     else:
-        projects = project_config.ProjectConfig.load(json)
+        projects = project_config.ProjectConfig.loadCustom(json)
 
     ref_path = os.path.join(work_path, 'micall.fasta')
     with open(ref_path, 'w') as ref:

@@ -6,7 +6,6 @@ specifications -- e.g., seed and coordinate reference sequences.
 import json
 import os
 
-
 class ProjectConfig(object):
     @classmethod
     def search(cls, project_paths):
@@ -31,6 +30,10 @@ class ProjectConfig(object):
         project_paths = [os.path.join(file_path, 'projects.json'),
                          os.path.join(os.path.dirname(file_path), 'projects.json')]
         return cls.search(project_paths)
+
+    @classmethod
+    def loadCustom(cls, json_path):
+        return cls.search([json_path])
 
     def load(self, json_file):
         self.json_file = json_file.name

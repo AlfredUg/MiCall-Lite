@@ -56,7 +56,7 @@ def parseArgs():
     parser.add_argument('--threads', '-t', type=int, default=4,
                         help="Number of threads for bowtie2 (default 4)")
 
-    parser.add_argument('--projects', '-p', type=argparse.FileType('rb'), required=False,
+    parser.add_argument('--projects', '-p', required=False,
                         help='<optional> Specify a custom projects JSON file.')
 
     if len(sys.argv) == 1:
@@ -149,7 +149,8 @@ def run_sample(args):
                    bt2_path=args.bt2,
                    bt2build_path=args.bt2build,
                    nthreads=args.threads,
-                   keep=args.keep
+                   keep=args.keep,
+                   json=args.projects
                    )
 
     print('  Iterative remap')
@@ -163,7 +164,8 @@ def run_sample(args):
               bt2_path=args.bt2,
               bt2build_path=args.bt2build,
               nthreads=args.threads,
-              keep=args.keep
+              keep=args.keep,
+              json=args.projects
               )
 
     print('  Generating alignment file')
@@ -182,7 +184,8 @@ def run_sample(args):
                    nuc_csv=handle,
                    amino_csv=open(amino_csv, 'w'),
                    coord_ins_csv=open(insert_csv, 'w'),
-                   conseq_csv=open(conseq_csv, 'w'))
+                   conseq_csv=open(conseq_csv, 'w'),
+                   json=args.projects)
 
     if not args.keep:
         os.remove(prelim_csv)
