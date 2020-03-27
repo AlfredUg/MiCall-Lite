@@ -17,6 +17,7 @@ class ProjectConfig(object):
                     projects.load(projects_file)
                     break
             except:
+                #raise  # it is useful to have JSON parsing info for debugging - AP
                 projects = None
 
         if not projects:
